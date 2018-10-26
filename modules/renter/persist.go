@@ -5,9 +5,12 @@ import (
 	"compress/gzip"
 	"encoding/base64"
 	"io"
+	"io/ioutil"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"gitlab.com/NebulousLabs/Sia/build"
@@ -43,6 +46,10 @@ var (
 	// ErrNonShareSuffix is an error when the suffix of a file does not match the defined share extension
 	ErrNonShareSuffix = errors.New("suffix of file must be " + ShareExtension)
 
+	dirMetadataHeader = persist.Metadata{
+		Header:  "Sia Directory Metadata",
+		Version: persistVersion,
+	}
 	settingsMetadata = persist.Metadata{
 		Header:  "Renter Persistence",
 		Version: persistVersion,
@@ -54,9 +61,34 @@ var (
 	// Persist Version Numbers
 	persistVersion040 = "0.4"
 	persistVersion133 = "1.3.3"
+
+	// timeBetweenRepair is the amount of time to wait before trying to repair a
+	// file again.  This is to prevent one bad file being repaired continuosly
+	// while other files degrade
+	//
+	// TODO - threadedUpload loop only runs every 15mins, unless renter uploads
+	// file. How should this impact the value of timeBetweenRepair
+	timeBetweenRepair = func() int64 {
+		switch build.Release {
+		case "dev":
+			return int64(time.Minute * 5)
+		case "standard":
+			return int64(time.Hour * 2)
+		case "testing":
+			return int64(time.Second * 5)
+		}
+		panic("undefined timeBetweenRepair")
+	}()
 )
 
 type (
+	// dirMetadata contains the metadata information about a renter directory
+	dirMetadata struct {
+		MinHealth        int
+		RecentRepairTime int64
+		RecentUpdateTime int64
+	}
+
 	// persist contains all of the persistent renter data.
 	persistence struct {
 		MaxDownloadSpeed int64
@@ -195,7 +227,7 @@ func (r *Renter) createDir(siapath string) error {
 
 	// Make sure all parent directories have metadata files
 	for path != filepath.Dir(r.filesDir) {
-		if err := createDirMetadata(path); err != nil {
+		if err := r.createDirMetadata(path); err != nil {
 			return err
 		}
 		path = filepath.Dir(path)
@@ -204,27 +236,110 @@ func (r *Renter) createDir(siapath string) error {
 }
 
 // createDirMetadata makes sure there is a metadata file in the directory and
-// updates or creates one as needed
-func createDirMetadata(path string) error {
+// creates one as needed
+func (r *Renter) createDirMetadata(path string) error {
 	fullPath := filepath.Join(path, SiaDirMetadata)
 	// Check if metadata file exists
 	if _, err := os.Stat(fullPath); err == nil {
-		// TODO: update metadata file
 		return nil
 	}
 
-	// TODO: update to get actual min redundancy
-	data := struct {
-		LastUpdate    int64
-		MinRedundancy float64
-	}{time.Now().UnixNano(), float64(0)}
-
-	metadataHeader := persist.Metadata{
-		Header:  "Sia Directory Metadata",
-		Version: persistVersion,
+	// Initialize metadata, set MinHealth to MaxInt64 so empty directories
+	// won't be viewed as being the most in need
+	data := dirMetadata{
+		MinHealth:        math.MaxInt64,
+		RecentRepairTime: int64(0),
+		RecentUpdateTime: time.Now().UnixNano(),
 	}
+	return r.saveDirMetadata(path, data)
+}
 
-	return persist.SaveJSON(metadataHeader, data, fullPath)
+// findMinDirRedundancy walks the renter's file directory and finds the
+// directory with the lowest minHealth. Since it uses Walk() the directory
+// returned will be the lowest level directory
+func (r *Renter) findMinDirRedundancy() (string, error) {
+	var metadata, metadataAnyTime dirMetadata
+	dir := r.filesDir
+	minHealth := math.MaxInt64
+	dirAnyTime := r.filesDir // dirAnyTime is the dir regardless of timeBetweenRepair
+
+	// Read renter files directory metadata
+	persistDirMetadata, err := r.loadDirMetadata(dir)
+	if err != nil {
+		r.log.Printf("WARN: Could not load directory metadata for %v: %v", dir, err)
+		return dir, err
+	}
+	// This Walk will log errors but not return them
+	_ = filepath.Walk(r.filesDir, func(path string, info os.FileInfo, err error) error {
+		// Skip files
+		if !info.IsDir() {
+			return nil
+		}
+
+		// Skip empty directories, directories when they are created should have
+		// the sia folder metadata and temp metadata files
+		fileinfos, err := ioutil.ReadDir(path)
+		if len(fileinfos) <= 2 {
+			// Confirm that the two files are the metadata files, log error if
+			// that isn't the case
+			if len(fileinfos) < 2 {
+				r.log.Printf("WARN: directory %v doesn't appear to have folder metadata files\n", path)
+			}
+			return nil
+		}
+
+		// Load directory metadata
+		md, err := r.loadDirMetadata(path)
+		if err != nil {
+			r.log.Printf("WARN: Could not load directory metadata for %v: %v\n", path, err)
+			return nil
+		}
+
+		// Check minHealth and record lower health
+		if md.MinHealth > minHealth {
+			return nil
+		}
+		metadataAnyTime = md
+		dirAnyTime = path
+		// Check if directory was recently repaired, if so skip
+		if md.RecentRepairTime < time.Now().UnixNano()-timeBetweenRepair {
+			metadata = md
+			minHealth = md.MinHealth
+			dir = path
+		}
+		return nil
+	})
+
+	// Check to see if directory returned is the top level files directory. If
+	// so and it was recently repaired, submit the lowest heatlh directory
+	// regardless of its RecentRepairTime
+	if dir == r.filesDir && persistDirMetadata.RecentRepairTime >= time.Now().UnixNano()-timeBetweenRepair {
+		metadataAnyTime.RecentRepairTime = time.Now().UnixNano()
+		return dirAnyTime, r.saveDirMetadata(dirAnyTime, metadataAnyTime)
+	}
+	metadata.RecentRepairTime = time.Now().UnixNano()
+	return dir, r.saveDirMetadata(dir, metadata)
+}
+
+// loadDirMetadata loads the directory metadata from disk
+func (r *Renter) loadDirMetadata(path string) (dirMetadata, error) {
+	var metadata dirMetadata
+	err := persist.LoadJSON(dirMetadataHeader, &metadata, filepath.Join(path, SiaDirMetadata))
+	if os.IsNotExist(err) {
+		if err = r.createDirMetadata(path); err != nil {
+			return metadata, err
+		}
+		return r.loadDirMetadata(path)
+	}
+	if err != nil {
+		return metadata, err
+	}
+	return metadata, nil
+}
+
+// saveDirMetadata saves the directory metadata to disk
+func (r *Renter) saveDirMetadata(path string, metadata dirMetadata) error {
+	return persist.SaveJSON(dirMetadataHeader, metadata, filepath.Join(path, SiaDirMetadata))
 }
 
 // saveSync stores the current renter data to disk and then syncs to disk.
@@ -260,6 +375,124 @@ func (r *Renter) loadSiaFiles() error {
 		r.files[sf.SiaPath()] = sf
 		return nil
 	})
+}
+
+// calculateMinHealth reads the sia files in the directory and returns the
+// minHealth. This method with log errors and not consider errors fatal
+func (r *Renter) calculateMinHealth(path string) int {
+	// Initialize minHealth as MaxInt64 so errors and empty directories won't
+	// falsely indicate the most in need directory
+	minHealth := math.MaxInt64
+
+	// Read directory
+	finfos, err := ioutil.ReadDir(path)
+	if err != nil {
+		r.log.Printf("WARN: Error in reading files in directory %v : %v\n", path, err)
+		return minHealth
+	}
+
+	// Load siafiles
+	var siafiles []*siafile.SiaFile
+	for _, fi := range finfos {
+		if !strings.HasPrefix(fi.Name(), ShareExtension) {
+			continue
+		}
+		filename := filepath.Join(path, fi.Name())
+		// Load the Siafile.
+		sf, err := siafile.LoadSiaFile(filename, r.wal)
+		if err != nil {
+			continue
+		}
+
+		siafiles = append(siafiles, sf)
+	}
+
+	// Calculate file healths and find minHealth
+	offline, _ := r.offlineGoodForRenewMaps(siafiles)
+	for _, sf := range siafiles {
+		health := sf.Health(offline)
+		if health < minHealth {
+			minHealth = health
+		}
+	}
+	return minHealth
+}
+
+// calculateRenterFilesHealth reads all the sia files in the renter, calculates
+// the health of each file and updates the folder metadata
+func (r *Renter) calculateRenterFilesHealth() {
+	// Recursively read all files found in renter directory. Errors
+	// encountered during loading are logged, but are not considered fatal.
+	_ = filepath.Walk(r.filesDir, func(path string, info os.FileInfo, err error) error {
+		// This error is non-nil if filepath.Walk couldn't stat a file or
+		// folder.
+		if err != nil {
+			r.log.Println("WARN: could not stat file or folder during walk:", err)
+			return nil
+		}
+
+		// Skip files.
+		if !info.IsDir() {
+			return nil
+		}
+
+		// Calculate health of directory files and find min health
+		minHealth := r.calculateMinHealth(path)
+
+		// Update directory metadata
+		md, err := r.loadDirMetadata(path)
+		if err != nil {
+			r.log.Printf("WARN: could not load directory metadata %v : %v\n", path, err)
+		}
+		md.MinHealth = minHealth
+		md.RecentUpdateTime = time.Now().UnixNano()
+		err = r.saveDirMetadata(path, md)
+		if err != nil {
+			r.log.Println("WARN: could not update directory metadata:", err)
+			return nil
+		}
+
+		// Propagate the minHealth to make sure that the minHealth is properly
+		// reflected through the renter directory
+		r.propagateMinHealth(filepath.Dir(path), minHealth)
+
+		return nil
+	})
+}
+
+// propagateMinHealth make sure that the minHealth is properly reflected
+// throughout the renter directory. This function will always compare the
+// provided minHealth with the minHealth of the directory metadata so if a
+// directory was just updated it should have its metadata updated prior to
+// calling this function
+func (r *Renter) propagateMinHealth(path string, minHealth int) {
+	for path != r.persistDir {
+		func() {
+			defer func() {
+				path = filepath.Dir(path)
+			}()
+
+			// Read directory metadata
+			md, err := r.loadDirMetadata(path)
+			if err != nil {
+				r.log.Printf("WARN: Could not load directory metadata for %v: %v\n", path, err)
+				return
+			}
+
+			// Check minHealth and update metadata if minHealth is less than
+			// current directory minHealth
+			if md.MinHealth <= minHealth {
+				return
+			}
+			md.MinHealth = minHealth
+			md.RecentUpdateTime = time.Now().UnixNano()
+			err = r.saveDirMetadata(path, md)
+			if err != nil {
+				r.log.Println("WARN: could not update directory metadata:", err)
+				return
+			}
+		}()
+	}
 }
 
 // load fetches the saved renter data from disk.
@@ -359,7 +592,7 @@ func (r *Renter) loadSharedFiles(reader io.Reader, repairPath string) ([]string,
 // initPersist handles all of the persistence initialization, such as creating
 // the persistence directory and starting the logger.
 func (r *Renter) initPersist() error {
-	// Create the perist and files directories if they do not yet exist.
+	// Create the persist and files directories if they do not yet exist.
 	err := os.MkdirAll(r.filesDir, 0700)
 	if err != nil {
 		return err

@@ -300,6 +300,27 @@ func (sf *SiaFile) HostPublicKeys() (spks []types.SiaPublicKey) {
 	return keys
 }
 
+// Health calculates the health of the file to be used in determining repair
+// priority. Health is defined as goodPieces - minPieces
+func (sf *SiaFile) Health(offline map[string]bool) int {
+	sf.mu.RLock()
+	defer sf.mu.RUnlock()
+	// Find all the good pieces
+	var goodPieces int
+	for _, chunk := range sf.staticChunks {
+		for _, pieceSet := range chunk.Pieces {
+			for _, piece := range pieceSet {
+				if !offline[string(sf.pubKeyTable[piece.HostTableOffset].PublicKey.Key)] {
+					goodPieces++
+					break // break out since we only count unique pieces
+				}
+			}
+		}
+	}
+
+	return goodPieces - sf.staticMetadata.staticErasureCode.MinPieces()
+}
+
 // NumChunks returns the number of chunks the file consists of. This will
 // return the number of chunks the file consists of even if the file is not
 // fully uploaded yet.

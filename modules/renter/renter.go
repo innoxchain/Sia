@@ -174,7 +174,6 @@ type hostContractor interface {
 // the same way that we split of the memoryManager entirely.
 type Renter struct {
 	// File management.
-	//
 	files map[string]*siafile.SiaFile
 
 	// Download management. The heap has a separate mutex because it is always
@@ -399,6 +398,34 @@ func (r *Renter) PriceEstimation(allowance modules.Allowance) (modules.RenterPri
 	r.mu.Unlock(id)
 
 	return est, allowance, nil
+}
+
+// offlineGoodForRenewMaps returns the offline and gooforrenew maps needed for
+// calculating redundancy and other file metrics. It takes a slice of siafiles
+// as input so it can be used for files stored in memory as well as files read
+// from disk
+func (r *Renter) offlineGoodForRenewMaps(files []*siafile.SiaFile) (offline map[string]bool, goodForRenew map[string]bool) {
+	// Save host keys in map.
+	pks := make(map[string]types.SiaPublicKey)
+	goodForRenew = make(map[string]bool)
+	offline = make(map[string]bool)
+	for _, f := range files {
+		for _, pk := range f.HostPublicKeys() {
+			pks[string(pk.Key)] = pk
+		}
+	}
+
+	// Build 2 maps that map every pubkey to its offline and goodForRenew
+	// status.
+	for _, pk := range pks {
+		cu, ok := r.ContractUtility(pk)
+		if !ok {
+			continue
+		}
+		goodForRenew[string(pk.Key)] = ok && cu.GoodForRenew
+		offline[string(pk.Key)] = r.hostContractor.IsOffline(pk)
+	}
+	return offline, goodForRenew
 }
 
 // setBandwidthLimits will change the bandwidth limits of the renter based on
