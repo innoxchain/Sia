@@ -65,12 +65,12 @@ outer:
 	for i, o := range outputs {
 		txnIndices, err := dbGetAddrTransactions(w.dbTx, o.UnlockHash)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		for _, j := range txnIndices {
 			pt, err := dbGetProcessedTransaction(w.dbTx, j)
 			if err != nil {
-				return nil, err
+				continue
 			}
 			for _, sco := range pt.Outputs {
 				if sco.ID == o.ID {
