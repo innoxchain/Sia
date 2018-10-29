@@ -210,13 +210,7 @@ func (d *download) managedFail(err error) {
 	// Mark the download as complete and set the error.
 	d.err = err
 	close(d.completeChan)
-	if d.destination != nil {
-		err = d.destination.Close()
-		d.destination = nil
-	}
-	if err != nil {
-		d.log.Println("unable to close download destination:", err)
-	}
+	d.destination = nil
 }
 
 // staticComplete is a helper function to indicate whether or not the download
@@ -306,7 +300,7 @@ func (r *Renter) managedDownload(p modules.RenterDownloadParameters) (*download,
 	var dw downloadDestination
 	var destinationType string
 	if isHTTPResp {
-		dw = newDownloadDestinationWriteCloserFromWriter(p.Httpwriter)
+		dw = newDownloadDestinationWriter(p.Httpwriter)
 		destinationType = "http stream"
 	} else {
 		osFile, err := os.OpenFile(p.Destination, os.O_CREATE|os.O_WRONLY, file.Mode())
@@ -340,8 +334,19 @@ func (r *Renter) managedDownload(p modules.RenterDownloadParameters) (*download,
 		overdrive:     3, // TODO: moderate default until full overdrive support is added.
 		priority:      5, // TODO: moderate default until full priority support is added.
 	})
-	if err != nil {
+	if osFile, ok := dw.(*os.File); err != nil && ok {
+		// If the destination was a file we close it.
+		return nil, errors.Compose(err, osFile.Close())
+	} else if err != nil {
 		return nil, err
+	}
+
+	// Once the download is done we close the file.
+	if osFile, ok := dw.(*os.File); ok {
+		go func() {
+			<-d.completeChan
+			osFile.Close()
+		}()
 	}
 
 	// Add the download object to the download queue.
