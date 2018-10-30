@@ -34,15 +34,18 @@ type (
 // managedCheckForDuplicates checks for static contracts that have the same host
 // key and moves the older one to old contracts
 func (c *Contractor) managedCheckForDuplicates() {
+	fmt.Println("=== Checking for duplicates")
 	// Build map for comparison
 	pubkeys := make(map[string]types.FileContractID)
 	var newContract, oldContract modules.RenterContract
 	for _, contract := range c.staticContracts.ViewAll() {
 		id, exists := pubkeys[contract.HostPublicKey.String()]
 		if !exists {
+			fmt.Println("   host", contract.HostPublicKey.String())
 			pubkeys[contract.HostPublicKey.String()] = contract.ID
 			continue
 		}
+		fmt.Println("   Duplicate found")
 		// Duplicate contract found, determine older contract to delete
 		if rc, ok := c.staticContracts.View(id); ok {
 			if rc.StartHeight >= contract.StartHeight {
@@ -53,6 +56,7 @@ func (c *Contractor) managedCheckForDuplicates() {
 			// Get SafeContract
 			oldSC, ok := c.staticContracts.Acquire(oldContract.ID)
 			if !ok {
+				fmt.Println("   Update map")
 				// Update map
 				pubkeys[contract.HostPublicKey.String()] = newContract.ID
 				continue

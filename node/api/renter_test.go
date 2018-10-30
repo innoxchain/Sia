@@ -1328,13 +1328,22 @@ func TestRenterPricesHandlerPricey(t *testing.T) {
 	}
 }
 
-// TestContractorHostRemoval checks that the contractor properly migrates away
-// from low quality hosts when there are higher quality hosts available.
-func TestContractorHostRemoval(t *testing.T) {
-	// Create a renter and 2 hosts. Connect to the hosts and start uploading.
-	if testing.Short() || !build.VLONG {
-		t.SkipNow()
+func TestRepeat(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		testContractorHostRemoval(t)
+		if i%10 == 0 {
+			fmt.Println("Successful tests", i)
+		}
 	}
+}
+
+// testContractorHostRemoval checks that the contractor properly migrates away
+// from low quality hosts when there are higher quality hosts available.
+func testContractorHostRemoval(t *testing.T) {
+	// // Create a renter and 2 hosts. Connect to the hosts and start uploading.
+	// if testing.Short() || !build.VLONG {
+	// 	t.SkipNow()
+	// }
 	st, err := createServerTester(t.Name() + "renter")
 	if err != nil {
 		t.Fatal(err)
@@ -1508,23 +1517,35 @@ func TestContractorHostRemoval(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Mine a block to trigger a second run of threadedContractMaintenance.
-	_, err = st.miner.AddBlock()
-	if err != nil {
-		t.Fatal(err)
-	}
+	fmt.Println("Hosts")
+	fmt.Println("st", st.host.PublicKey().String())
+	fmt.Println("stH1", stH1.host.PublicKey().String())
+	fmt.Println("stH2", stH2.host.PublicKey().String())
+	fmt.Println("stH3", stH3.host.PublicKey().String())
+	fmt.Println("stH4", stH4.host.PublicKey().String())
 
 	// Verify that st and stH1 are dropped in favor of the newer, better hosts.
 	rc = RenterContracts{}
-	err = build.Retry(100, time.Millisecond*100, func() error {
-		var newContracts int
+	var newContracts int
+	hostMap := make(map[string]struct{})
+	hostMap[rc1Host] = struct{}{}
+	hostMap[rc2Host] = struct{}{}
+	loop := 0
+	err = build.Retry(600, time.Millisecond*100, func() error {
+		// Mine a block every 10 iterations to continue to trigger
+		// threadedContractMaintenance
+		if loop%10 == 0 {
+			_, err = st.miner.AddBlock()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		loop++
+
 		err = st.getAPI("/renter/contracts", &rc)
 		if err != nil {
 			return errors.New("couldn't get renter stats")
 		}
-		hostMap := make(map[string]struct{})
-		hostMap[rc1Host] = struct{}{}
-		hostMap[rc2Host] = struct{}{}
 		for _, contract := range rc.ActiveContracts {
 			_, exists := hostMap[contract.HostPublicKey.String()]
 			if !exists {
@@ -1538,6 +1559,11 @@ func TestContractorHostRemoval(t *testing.T) {
 		return nil
 	})
 	if err != nil {
+		for _, c := range rc.ActiveContracts {
+			fmt.Println("ID", c.ID)
+			fmt.Println("Host", c.HostPublicKey.String())
+			fmt.Println("EndHeight", c.EndHeight)
+		}
 		t.Fatal(err)
 	}
 
@@ -1580,7 +1606,7 @@ func TestContractorHostRemoval(t *testing.T) {
 	}
 	// Give the renter time to renew. Two of the contracts should renew.
 	var rc2 RenterContracts
-	loop := 0
+	loop = 0
 	err = build.Retry(100, time.Millisecond*100, func() error {
 		loop++
 		// Mine a block every 10 iterations to make sure
