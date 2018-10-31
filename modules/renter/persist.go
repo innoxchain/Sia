@@ -61,24 +61,6 @@ var (
 	// Persist Version Numbers
 	persistVersion040 = "0.4"
 	persistVersion133 = "1.3.3"
-
-	// timeBetweenRepair is the amount of time to wait before trying to repair a
-	// file again.  This is to prevent one bad file being repaired continuosly
-	// while other files degrade
-	//
-	// TODO - threadedUpload loop only runs every 15mins, unless renter uploads
-	// file. How should this impact the value of timeBetweenRepair
-	timeBetweenRepair = func() int64 {
-		switch build.Release {
-		case "dev":
-			return int64(time.Minute * 5)
-		case "standard":
-			return int64(time.Hour * 2)
-		case "testing":
-			return int64(time.Second * 5)
-		}
-		panic("undefined timeBetweenRepair")
-	}()
 )
 
 type (
@@ -410,6 +392,10 @@ func (r *Renter) calculateMinHealth(path string) int {
 	// Calculate file healths and find minHealth
 	offline, _ := r.offlineGoodForRenewMaps(siafiles)
 	for _, sf := range siafiles {
+		// Skip files that have recently been repaired
+		if time.Since(sf.RecentRepairTime()) < repairInterval {
+			continue
+		}
 		health := sf.Health(offline)
 		if health < minHealth {
 			minHealth = health
@@ -418,46 +404,68 @@ func (r *Renter) calculateMinHealth(path string) int {
 	return minHealth
 }
 
-// calculateRenterFilesHealth reads all the sia files in the renter, calculates
+// threadedUpdateRenterFileHealth reads all the sia files in the renter, calculates
 // the health of each file and updates the folder metadata
-func (r *Renter) calculateRenterFilesHealth() {
-	// Recursively read all files found in renter directory. Errors
-	// encountered during loading are logged, but are not considered fatal.
-	_ = filepath.Walk(r.filesDir, func(path string, info os.FileInfo, err error) error {
-		// This error is non-nil if filepath.Walk couldn't stat a file or
-		// folder.
-		if err != nil {
-			r.log.Println("WARN: could not stat file or folder during walk:", err)
+func (r *Renter) threadedUpdateRenterFileHealth() {
+	if err := r.tg.Add(); err != nil {
+		return
+	}
+	defer r.tg.Done()
+
+	for {
+		// Work through the renter's file. File health will be calculated and
+		// the min health will be stored in the directory metadata and bubbled
+		// up to the top level file directory. When all the files have been
+		// checked, we wait for the checkFileHealthSignal and start over.
+		checkFileHealthSignal := time.After(healthCheckInterval)
+
+		// Recursively read all files found in renter directory. Errors
+		// encountered during loading are logged, but are not considered fatal.
+		_ = filepath.Walk(r.filesDir, func(path string, info os.FileInfo, err error) error {
+			// This error is non-nil if filepath.Walk couldn't stat a file or
+			// folder.
+			if err != nil {
+				r.log.Println("WARN: could not stat file or folder during walk:", err)
+				return nil
+			}
+
+			// Skip files.
+			if !info.IsDir() {
+				return nil
+			}
+
+			// Calculate health of directory files and find min health
+			minHealth := r.calculateMinHealth(path)
+
+			// Update directory metadata
+			md, err := r.loadDirMetadata(path)
+			if err != nil {
+				r.log.Printf("WARN: could not load directory metadata %v : %v\n", path, err)
+			}
+			md.MinHealth = minHealth
+			md.RecentUpdateTime = time.Now().UnixNano()
+			err = r.saveDirMetadata(path, md)
+			if err != nil {
+				r.log.Println("WARN: could not update directory metadata:", err)
+				return nil
+			}
+
+			// Propagate the minHealth to make sure that the minHealth is properly
+			// reflected through the renter directory
+			r.propagateMinHealth(filepath.Dir(path), minHealth)
+
 			return nil
+		})
+
+		// Block until work is required.
+		select {
+		case <-checkFileHealthSignal:
+			// Time to check the filesystem health again.
+		case <-r.tg.StopChan():
+			// The renter has shutdown
+			return
 		}
-
-		// Skip files.
-		if !info.IsDir() {
-			return nil
-		}
-
-		// Calculate health of directory files and find min health
-		minHealth := r.calculateMinHealth(path)
-
-		// Update directory metadata
-		md, err := r.loadDirMetadata(path)
-		if err != nil {
-			r.log.Printf("WARN: could not load directory metadata %v : %v\n", path, err)
-		}
-		md.MinHealth = minHealth
-		md.RecentUpdateTime = time.Now().UnixNano()
-		err = r.saveDirMetadata(path, md)
-		if err != nil {
-			r.log.Println("WARN: could not update directory metadata:", err)
-			return nil
-		}
-
-		// Propagate the minHealth to make sure that the minHealth is properly
-		// reflected through the renter directory
-		r.propagateMinHealth(filepath.Dir(path), minHealth)
-
-		return nil
-	})
+	}
 }
 
 // propagateMinHealth make sure that the minHealth is properly reflected

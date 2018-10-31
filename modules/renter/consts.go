@@ -97,6 +97,14 @@ var (
 		Testing:  1 * time.Minute,
 	}).(time.Duration)
 
+	// healthCheckInterval defines how long the renter sleeps between
+	// checking on the filesystem health.
+	healthCheckInterval = build.Select(build.Var{
+		Dev:      90 * time.Second,
+		Standard: 15 * time.Minute,
+		Testing:  3 * time.Second,
+	}).(time.Duration)
+
 	// maxConsecutivePenalty determines how many times the timeout/cooldown for
 	// being a bad host can be doubled before a maximum cooldown is reached.
 	maxConsecutivePenalty = build.Select(build.Var{
@@ -124,6 +132,10 @@ var (
 
 	// rebuildChunkHeapInterval defines how long the renter sleeps between
 	// checking on the filesystem health.
+	//
+	// TODO - this constant will be removed and replaced with a combination of
+	// healthCheckInterval and repairInterval. Leaving in place until new repair
+	// loops are created as to not break the current loop
 	rebuildChunkHeapInterval = build.Select(build.Var{
 		Dev:      90 * time.Second,
 		Standard: 15 * time.Minute,
@@ -137,6 +149,27 @@ var (
 		Standard: 0.25,
 		Testing:  0.25,
 	}).(float64)
+
+	// repairInterval is the amount of time to wait before trying to repair a
+	// file again.  This is to prevent one bad file being repaired continuosly
+	// while other files degrade
+	//
+	// TODO - threadedUpload loop only runs every 15mins, unless renter uploads
+<<<<<<< HEAD
+	// file. How should this impact the value of timeBetweenRepair
+	timeBetweenRepair = build.Select(build.Var{
+		Dev:      int64(time.Minute * 5),
+		Standard: int64(time.Hour * 2),
+		Testing:  int64(time.Second * 5),
+	}).(int64)
+=======
+	// file. How should this impact the value of repairInterval
+	repairInterval = build.Select(build.Var{
+		Dev:      time.Minute,
+		Standard: 10 * time.Minute,
+		Testing:  time.Second,
+	}).(time.Duration)
+>>>>>>> 9a1e327... Update naming of repair loop interval constants
 
 	// Prime to avoid intersecting with regular events.
 	uploadFailureCooldown = build.Select(build.Var{
