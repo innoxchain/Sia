@@ -236,66 +236,79 @@ func (r *Renter) createDirMetadata(path string) error {
 	return r.saveDirMetadata(path, data)
 }
 
-// findMinDirRedundancy walks the renter's file directory and finds the
-// directory with the lowest minHealth. Since it uses Walk() the directory
-// returned will be the lowest level directory
-func (r *Renter) findMinDirRedundancy() (string, error) {
-	var metadata, metadataAnyTime dirMetadata
+// findMinHealthDir walks the renter's file directory and finds the
+// directory with the lowest minHealth.
+func (r *Renter) findMinHealthDir() (string, error) {
+	// Read renter files directory metadata
 	dir := r.filesDir
 	minHealth := math.MaxInt64
-	dirAnyTime := r.filesDir // dirAnyTime is the dir regardless of timeBetweenRepair
-
-	// Read renter files directory metadata
-	persistDirMetadata, err := r.loadDirMetadata(dir)
+	dirAnyTime := dir
+	metadata, err := r.loadDirMetadata(dir)
 	if err != nil {
 		r.log.Printf("WARN: Could not load directory metadata for %v: %v", dir, err)
 		return dir, err
 	}
-	// This Walk will log errors but not return them
-	_ = filepath.Walk(r.filesDir, func(path string, info os.FileInfo, err error) error {
-		// Skip files
-		if !info.IsDir() {
-			return nil
-		}
-
-		// Skip empty directories, directories when they are created should have
-		// the sia folder metadata and temp metadata files
-		fileinfos, err := ioutil.ReadDir(path)
-		if len(fileinfos) <= 2 {
-			// Confirm that the two files are the metadata files, log error if
-			// that isn't the case
-			if len(fileinfos) < 2 {
-				r.log.Printf("WARN: directory %v doesn't appear to have folder metadata files\n", path)
-			}
-			return nil
-		}
-
-		// Load directory metadata
-		md, err := r.loadDirMetadata(path)
+	metadataAnyTime := metadata
+	subDirs := -1
+	for subDirs != 0 {
+		subDirs = 0
+		// Read directory, err considered fatal to avoid being caught in
+		// infinite loop
+		fileinfos, err := ioutil.ReadDir(dirAnyTime)
 		if err != nil {
-			r.log.Printf("WARN: Could not load directory metadata for %v: %v\n", path, err)
-			return nil
+			return dir, err
 		}
 
-		// Check minHealth and record lower health
-		if md.MinHealth > minHealth {
-			return nil
+		// Check sub directories
+		for _, fi := range fileinfos {
+			// Ignore files
+			if !fi.IsDir() {
+				continue
+			}
+
+			// Ignore empty directories
+			path := filepath.Join(dir, fi.Name())
+			fileinfosSubDir, err := ioutil.ReadDir(path)
+			if len(fileinfosSubDir) <= 2 {
+				// Confirm that the two files are the metadata files, log error if
+				// that isn't the case
+				if len(fileinfosSubDir) < 2 {
+					r.log.Printf("WARN: directory %v doesn't appear to have folder metadata files\n", path)
+				}
+				continue
+			}
+
+			// Load directory metadata, error not considered fatal as worst case
+			// the most in need directory is not repaired first
+			md, err := r.loadDirMetadata(path)
+			if err != nil {
+				r.log.Printf("WARN: Could not load directory metadata for %v: %v\n", path, err)
+				continue
+			}
+
+			// Check minHealth and record lower health
+			if md.MinHealth > minHealth {
+				continue
+			}
+
+			// Record the directory and metadata as it is the lowest score
+			// regardless of RecentRepairTime
+			metadataAnyTime = md
+			dirAnyTime = path
+			// Check if directory was recently repaired, if so skip
+			if md.RecentRepairTime < time.Now().UnixNano()-timeBetweenRepair {
+				metadata = md
+				minHealth = md.MinHealth
+				dir = path
+			}
+			subDirs++
 		}
-		metadataAnyTime = md
-		dirAnyTime = path
-		// Check if directory was recently repaired, if so skip
-		if md.RecentRepairTime < time.Now().UnixNano()-timeBetweenRepair {
-			metadata = md
-			minHealth = md.MinHealth
-			dir = path
-		}
-		return nil
-	})
+	}
 
 	// Check to see if directory returned is the top level files directory. If
 	// so and it was recently repaired, submit the lowest heatlh directory
 	// regardless of its RecentRepairTime
-	if dir == r.filesDir && persistDirMetadata.RecentRepairTime >= time.Now().UnixNano()-timeBetweenRepair {
+	if dir == r.filesDir && metadata.RecentRepairTime >= time.Now().UnixNano()-timeBetweenRepair {
 		metadataAnyTime.RecentRepairTime = time.Now().UnixNano()
 		return dirAnyTime, r.saveDirMetadata(dirAnyTime, metadataAnyTime)
 	}
@@ -361,10 +374,10 @@ func (r *Renter) loadSiaFiles() error {
 
 // managedCalculateMinHealth reads the sia files in the directory and returns the
 // minHealth. This method with log errors and not consider errors fatal
-func (r *Renter) managedCalculateMinHealth(path string) int {
+func (r *Renter) managedCalculateMinHealth(path string) (minHealth int) {
 	// Initialize minHealth as MaxInt64 so errors and empty directories won't
 	// falsely indicate the most in need directory
-	minHealth := math.MaxInt64
+	minHealth = math.MaxInt64
 
 	// Read directory
 	finfos, err := ioutil.ReadDir(path)
@@ -419,43 +432,9 @@ func (r *Renter) threadedUpdateRenterFileHealth() {
 		// checked, we wait for the checkFileHealthSignal and start over.
 		checkFileHealthSignal := time.After(healthCheckInterval)
 
-		// Recursively read all files found in renter directory. Errors
-		// encountered during loading are logged, but are not considered fatal.
-		_ = filepath.Walk(r.filesDir, func(path string, info os.FileInfo, err error) error {
-			// This error is non-nil if filepath.Walk couldn't stat a file or
-			// folder.
-			if err != nil {
-				r.log.Println("WARN: could not stat file or folder during walk:", err)
-				return nil
-			}
-
-			// Skip files.
-			if !info.IsDir() {
-				return nil
-			}
-
-			// Calculate health of directory files and find min health
-			minHealth := r.managedCalculateMinHealth(path)
-
-			// Update directory metadata
-			md, err := r.loadDirMetadata(path)
-			if err != nil {
-				r.log.Printf("WARN: could not load directory metadata %v : %v\n", path, err)
-			}
-			md.MinHealth = minHealth
-			md.RecentUpdateTime = time.Now().UnixNano()
-			err = r.saveDirMetadata(path, md)
-			if err != nil {
-				r.log.Println("WARN: could not update directory metadata:", err)
-				return nil
-			}
-
-			// Propagate the minHealth to make sure that the minHealth is properly
-			// reflected through the renter directory
-			r.propagateMinHealth(filepath.Dir(path), minHealth)
-
-			return nil
-		})
+		// Propagate the minHealth to make sure that the minHealth is properly
+		// reflected through the renter directory
+		_ = r.managedPropagateMinHealth(r.filesDir)
 
 		// Block until work is required.
 		select {
@@ -468,39 +447,55 @@ func (r *Renter) threadedUpdateRenterFileHealth() {
 	}
 }
 
-// propagateMinHealth make sure that the minHealth is properly reflected
-// throughout the renter directory. This function will always compare the
-// provided minHealth with the minHealth of the directory metadata so if a
-// directory was just updated it should have its metadata updated prior to
-// calling this function
-func (r *Renter) propagateMinHealth(path string, minHealth int) {
-	for path != r.persistDir {
-		func() {
-			defer func() {
-				path = filepath.Dir(path)
-			}()
+// managedPropagateMinHealth make sure that the minHealth is properly reflected
+// throughout the renter directory. Errors will not be considered critical so
+// they will be logged and not returned
+func (r *Renter) managedPropagateMinHealth(path string) (minHealth int) {
+	// Set minHealth to maxInt to avoid false 0 healths
+	minHealth = math.MaxInt64
 
-			// Read directory metadata
-			md, err := r.loadDirMetadata(path)
-			if err != nil {
-				r.log.Printf("WARN: Could not load directory metadata for %v: %v\n", path, err)
-				return
-			}
-
-			// Check minHealth and update metadata if minHealth is less than
-			// current directory minHealth
-			if md.MinHealth <= minHealth {
-				return
-			}
-			md.MinHealth = minHealth
-			md.RecentUpdateTime = time.Now().UnixNano()
-			err = r.saveDirMetadata(path, md)
-			if err != nil {
-				r.log.Println("WARN: could not update directory metadata:", err)
-				return
-			}
-		}()
+	// Read directory
+	fileinfos, err := ioutil.ReadDir(path)
+	if err != nil {
+		r.log.Printf("WARN: Error in reading files in directory %v : %v\n", path, err)
+		return minHealth
 	}
+
+	// Iterate of directory
+	for _, fi := range fileinfos {
+		// Ignore files
+		if !fi.IsDir() {
+			continue
+		}
+
+		// If directory is found, call propagateMinHealth and check
+		// propagatedHealth against minHealth
+		propagatedHealth := r.managedPropagateMinHealth(filepath.Join(path, fi.Name()))
+		if propagatedHealth < minHealth {
+			minHealth = propagatedHealth
+		}
+	}
+
+	// After iterating over entire directory call managedCalculateMinHealth and
+	// check directory health against minHealth
+	dirHealth := r.managedCalculateMinHealth(path)
+	if dirHealth < minHealth {
+		minHealth = dirHealth
+	}
+
+	// Update directory metadata with lower minHealth
+	md, err := r.loadDirMetadata(path)
+	if err != nil {
+		r.log.Printf("WARN: Could not load directory metadata for %v: %v\n", path, err)
+		return minHealth
+	}
+	md.MinHealth = minHealth
+	md.RecentUpdateTime = time.Now().UnixNano()
+	err = r.saveDirMetadata(path, md)
+	if err != nil {
+		r.log.Println("WARN: could not update directory metadata:", err)
+	}
+	return minHealth
 }
 
 // load fetches the saved renter data from disk.
