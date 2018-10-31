@@ -2401,13 +2401,20 @@ func TestRenterPersistData(t *testing.T) {
 	}
 }
 
-// TestRenterSpendingReporting checks the accuracy for the reported
-// spending
-func TestRenterSpendingReporting(t *testing.T) {
-	if testing.Short() || !build.VLONG {
-		t.SkipNow()
+func TestRepeat(t *testing.T) {
+	for i := 0; i < 5; i++ {
+		testRenterSpendingReporting(t)
+		fmt.Println("and another successful test", i)
 	}
-	t.Parallel()
+}
+
+// testRenterSpendingReporting checks the accuracy for the reported
+// spending
+func testRenterSpendingReporting(t *testing.T) {
+	// if testing.Short() || !build.VLONG {
+	// 	t.SkipNow()
+	// }
+	// t.Parallel()
 
 	// Create a testgroup, creating without renter so the renter's
 	// initial balance can be obtained
@@ -3126,7 +3133,7 @@ func renewContractsBySpending(renter *siatest.TestNode, tg *siatest.TestGroup) (
 	// Renew contracts by running out of funds
 	// Set upload price to max price
 	maxStoragePrice := types.SiacoinPrecision.Mul64(3e6).Div(modules.BlockBytesPerMonthTerabyte)
-	maxUploadPrice := maxStoragePrice.Mul64(20 * 4320)
+	maxUploadPrice := maxStoragePrice.Mul64(10 * 4320)
 	hosts := tg.Hosts()
 	for _, h := range hosts {
 		err := h.HostModifySettingPost(client.HostParamMinUploadBandwidthPrice, maxUploadPrice)

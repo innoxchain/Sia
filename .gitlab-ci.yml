@@ -19,42 +19,42 @@ before_script:
   - cp -R $CI_PROJECT_DIR $GOPATH/src/gitlab.com/NebulousLabs/Sia
   - cd $GOPATH/src/gitlab.com/NebulousLabs/Sia
 
-lint:
-  stage: lint
-  script: 
-    - go get -u github.com/alecthomas/gometalinter
-    - gometalinter --install
-    - gometalinter --deadline=300s --vendor --disable-all --enable=vet --enable=gofmt ./...
+# lint:
+#   stage: lint
+#   script: 
+#     - go get -u github.com/alecthomas/gometalinter
+#     - gometalinter --install
+#     - gometalinter --deadline=300s --vendor --disable-all --enable=vet --enable=gofmt ./...
 
-legacy-tests:
-  stage: test
-  except:
-    - schedules
-  artifacts:
-    name: "SiaTesting-$CI_JOB_NAME"
-    paths:
-      - $CI_PROJECT_DIR/SiaTesting
-      - $CI_PROJECT_DIR/cover/cover.out
-    when: always
-  script: 
-    - make test-long pkgs="./node ./node/api ./node/api/server" run=.
-    - cp -R /tmp/SiaTesting $CI_PROJECT_DIR/SiaTesting
-    - cp -R ./cover $CI_PROJECT_DIR/cover
+# legacy-tests:
+#   stage: test
+#   except:
+#     - schedules
+#   artifacts:
+#     name: "SiaTesting-$CI_JOB_NAME"
+#     paths:
+#       - $CI_PROJECT_DIR/SiaTesting
+#       - $CI_PROJECT_DIR/cover/cover.out
+#     when: always
+#   script: 
+#     - make test-long pkgs="./node ./node/api ./node/api/server" run=.
+#     - cp -R /tmp/SiaTesting $CI_PROJECT_DIR/SiaTesting
+#     - cp -R ./cover $CI_PROJECT_DIR/cover
 
-package-tests:
-  stage: test
-  except:
-    - schedules
-  artifacts:
-    name: "SiaTesting-$CI_JOB_NAME"
-    paths:
-      - $CI_PROJECT_DIR/SiaTesting
-      - $CI_PROJECT_DIR/cover/cover.out
-    when: always
-  script: 
-    - make test-long run=. pkgs="./build ./cmd/siac ./cmd/siad ./compatibility ./crypto ./encoding ./modules ./modules/consensus ./modules/explorer ./modules/gateway ./modules/host ./modules/host/contractmanager ./modules/renter ./modules/renter/contractor ./modules/renter/hostdb ./modules/renter/hostdb/hosttree ./modules/renter/proto ./modules/miner ./modules/wallet ./modules/transactionpool ./persist ./sync ./types"
-    - cp -R /tmp/SiaTesting $CI_PROJECT_DIR/SiaTesting
-    - cp -R ./cover $CI_PROJECT_DIR/cover
+# package-tests:
+#   stage: test
+#   except:
+#     - schedules
+#   artifacts:
+#     name: "SiaTesting-$CI_JOB_NAME"
+#     paths:
+#       - $CI_PROJECT_DIR/SiaTesting
+#       - $CI_PROJECT_DIR/cover/cover.out
+#     when: always
+#   script: 
+#     - make test-long run=. pkgs="./build ./cmd/siac ./cmd/siad ./compatibility ./crypto ./encoding ./modules ./modules/consensus ./modules/explorer ./modules/gateway ./modules/host ./modules/host/contractmanager ./modules/renter ./modules/renter/contractor ./modules/renter/hostdb ./modules/renter/hostdb/hosttree ./modules/renter/proto ./modules/miner ./modules/wallet ./modules/transactionpool ./persist ./sync ./types"
+#     - cp -R /tmp/SiaTesting $CI_PROJECT_DIR/SiaTesting
+#     - cp -R ./cover $CI_PROJECT_DIR/cover
 
 integration-tests:
   stage: test
@@ -67,7 +67,7 @@ integration-tests:
       - $CI_PROJECT_DIR/cover/cover.out
     when: always
   script:
-    - make test-long run=. pkgs="./siatest ./siatest/consensus ./siatest/renter ./siatest/wallet"
+    - make test-long run=TestRepeat pkgs="./siatest/renter"
     - cp -R /tmp/SiaTesting $CI_PROJECT_DIR/SiaTesting
     - cp -R ./cover $CI_PROJECT_DIR/cover
 
