@@ -359,9 +359,9 @@ func (r *Renter) loadSiaFiles() error {
 	})
 }
 
-// calculateMinHealth reads the sia files in the directory and returns the
+// managedCalculateMinHealth reads the sia files in the directory and returns the
 // minHealth. This method with log errors and not consider errors fatal
-func (r *Renter) calculateMinHealth(path string) int {
+func (r *Renter) managedCalculateMinHealth(path string) int {
 	// Initialize minHealth as MaxInt64 so errors and empty directories won't
 	// falsely indicate the most in need directory
 	minHealth := math.MaxInt64
@@ -390,7 +390,7 @@ func (r *Renter) calculateMinHealth(path string) int {
 	}
 
 	// Calculate file healths and find minHealth
-	offline, _ := r.offlineGoodForRenewMaps(siafiles)
+	offline, _ := r.managedFileUtilities(siafiles)
 	for _, sf := range siafiles {
 		// Skip files that have recently been repaired
 		if time.Since(sf.RecentRepairTime()) < repairInterval {
@@ -435,7 +435,7 @@ func (r *Renter) threadedUpdateRenterFileHealth() {
 			}
 
 			// Calculate health of directory files and find min health
-			minHealth := r.calculateMinHealth(path)
+			minHealth := r.managedCalculateMinHealth(path)
 
 			// Update directory metadata
 			md, err := r.loadDirMetadata(path)

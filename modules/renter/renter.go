@@ -400,11 +400,11 @@ func (r *Renter) PriceEstimation(allowance modules.Allowance) (modules.RenterPri
 	return est, allowance, nil
 }
 
-// offlineGoodForRenewMaps returns the offline and gooforrenew maps needed for
+// managedFileUtilities returns the offline and goodforrenew maps needed for
 // calculating redundancy and other file metrics. It takes a slice of siafiles
 // as input so it can be used for files stored in memory as well as files read
 // from disk
-func (r *Renter) offlineGoodForRenewMaps(files []*siafile.SiaFile) (offline map[string]bool, goodForRenew map[string]bool) {
+func (r *Renter) managedFileUtilities(files []*siafile.SiaFile) (offline map[string]bool, goodForRenew map[string]bool) {
 	// Save host keys in map.
 	pks := make(map[string]types.SiaPublicKey)
 	goodForRenew = make(map[string]bool)
@@ -422,7 +422,7 @@ func (r *Renter) offlineGoodForRenewMaps(files []*siafile.SiaFile) (offline map[
 		if !ok {
 			continue
 		}
-		goodForRenew[string(pk.Key)] = ok && cu.GoodForRenew
+		goodForRenew[string(pk.Key)] = cu.GoodForRenew
 		offline[string(pk.Key)] = r.hostContractor.IsOffline(pk)
 	}
 	return offline, goodForRenew

@@ -237,7 +237,7 @@ func (r *Renter) managedBuildChunkHeap(hosts map[string]struct{}) {
 	}
 	r.mu.RUnlock(lockID)
 
-	offline, goodForRenew := r.offlineGoodForRenewMaps(files)
+	offline, goodForRenew := r.managedFileUtilities(files)
 
 	// Loop through the whole set of files and get a list of chunks to add to
 	// the heap.
