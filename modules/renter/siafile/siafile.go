@@ -366,6 +366,14 @@ func (sf *SiaFile) Pieces(chunkIndex uint64) ([][]Piece, error) {
 	return pieces, nil
 }
 
+// RecentRepairTime returns the RecentRepairTime fields from the siafile
+// metadata
+func (sf *SiaFile) RecentRepairTime() time.Time {
+	sf.mu.Lock()
+	defer sf.mu.Unlock()
+	return sf.staticMetadata.RecentRepairTime
+}
+
 // Redundancy returns the redundancy of the least redundant chunk. A file
 // becomes available when this redundancy is >= 1. Assumes that every piece is
 // unique within a file contract. -1 is returned if the file has size 0. It

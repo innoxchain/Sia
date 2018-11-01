@@ -32,6 +32,10 @@ type (
 		AccessTime time.Time `json:"accesstime"` // time of last access
 		CreateTime time.Time `json:"createtime"` // time of file creation
 
+		// RecentRepairTime is the last that the file was submitted to the
+		// repair loop.
+		RecentRepairTime time.Time `json:"recentrepairtime"`
+
 		// File ownership/permission fields.
 		Mode    os.FileMode `json:"mode"`    // unix filemode of the sia file - uint32
 		UserID  int         `json:"userid"`  // id of the user who owns the file

@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"gitlab.com/NebulousLabs/Sia/build"
@@ -26,7 +25,8 @@ import (
 
 const (
 	logFile = modules.RenterDir + ".log"
-	// PersistFilename is the filename to be used when persisting renter information to a JSON file
+	// PersistFilename is the filename to be used when persisting renter
+	// information to a JSON file
 	PersistFilename = "renter.json"
 	// ShareExtension is the extension to be used
 	ShareExtension = ".sia"
@@ -37,13 +37,19 @@ const (
 )
 
 var (
+	// errAllFilesRecentlyRepaired is an error when the checking for the lowest
+	// health directory and all the files and directories have recently been
+	// repaired
+	errAllFilesRecentlyRepaired = errors.New("all files in renter directory have recently been repaired, no directory to return")
 	//ErrBadFile is an error when a file does not qualify as .sia file
 	ErrBadFile = errors.New("not a .sia file")
-	// ErrIncompatible is an error when file is not compatible with current version
+	// ErrIncompatible is an error when file is not compatible with current
+	// version
 	ErrIncompatible = errors.New("file is not compatible with current version")
 	// ErrNoNicknames is an error when no nickname is given
 	ErrNoNicknames = errors.New("at least one nickname must be supplied")
-	// ErrNonShareSuffix is an error when the suffix of a file does not match the defined share extension
+	// ErrNonShareSuffix is an error when the suffix of a file does not match
+	// the defined share extension
 	ErrNonShareSuffix = errors.New("suffix of file must be " + ShareExtension)
 
 	dirMetadataHeader = persist.Metadata{
@@ -67,7 +73,6 @@ type (
 	// dirMetadata contains the metadata information about a renter directory
 	dirMetadata struct {
 		MinHealth        int
-		RecentRepairTime int64
 		RecentUpdateTime int64
 	}
 
@@ -230,31 +235,32 @@ func (r *Renter) createDirMetadata(path string) error {
 	// won't be viewed as being the most in need
 	data := dirMetadata{
 		MinHealth:        math.MaxInt64,
-		RecentRepairTime: int64(0),
 		RecentUpdateTime: time.Now().UnixNano(),
 	}
 	return r.saveDirMetadata(path, data)
 }
 
-// findMinHealthDir walks the renter's file directory and finds the
-// directory with the lowest minHealth.
-func (r *Renter) findMinHealthDir() (string, error) {
+// minHealthDir walks the renter's file directory and finds the directory with
+// the lowest minHealth and the lowest level in the renter directory
+func (r *Renter) minHealthDir() (string, error) {
 	// Read renter files directory metadata
 	dir := r.filesDir
 	minHealth := math.MaxInt64
-	dirAnyTime := dir
 	metadata, err := r.loadDirMetadata(dir)
 	if err != nil {
 		r.log.Printf("WARN: Could not load directory metadata for %v: %v", dir, err)
 		return dir, err
 	}
-	metadataAnyTime := metadata
+	if metadata.MinHealth < minHealth {
+		minHealth = metadata.MinHealth
+	}
+
 	subDirs := -1
 	for subDirs != 0 {
 		subDirs = 0
 		// Read directory, err considered fatal to avoid being caught in
 		// infinite loop
-		fileinfos, err := ioutil.ReadDir(dirAnyTime)
+		fileinfos, err := ioutil.ReadDir(dir)
 		if err != nil {
 			return dir, err
 		}
@@ -291,16 +297,8 @@ func (r *Renter) findMinHealthDir() (string, error) {
 				continue
 			}
 
-			// Record the directory and metadata as it is the lowest score
-			// regardless of RecentRepairTime
-			metadataAnyTime = md
-			dirAnyTime = path
-			// Check if directory was recently repaired, if so skip
-			if md.RecentRepairTime < time.Now().UnixNano()-timeBetweenRepair {
-				metadata = md
-				minHealth = md.MinHealth
-				dir = path
-			}
+			// Record the directory
+			dir = path
 			subDirs++
 		}
 	}
@@ -308,12 +306,10 @@ func (r *Renter) findMinHealthDir() (string, error) {
 	// Check to see if directory returned is the top level files directory. If
 	// so and it was recently repaired, submit the lowest heatlh directory
 	// regardless of its RecentRepairTime
-	if dir == r.filesDir && metadata.RecentRepairTime >= time.Now().UnixNano()-timeBetweenRepair {
-		metadataAnyTime.RecentRepairTime = time.Now().UnixNano()
-		return dirAnyTime, r.saveDirMetadata(dirAnyTime, metadataAnyTime)
+	if dir == r.filesDir && minHealth == math.MaxInt64 {
+		return "", errAllFilesRecentlyRepaired
 	}
-	metadata.RecentRepairTime = time.Now().UnixNano()
-	return dir, r.saveDirMetadata(dir, metadata)
+	return dir, nil
 }
 
 // loadDirMetadata loads the directory metadata from disk
@@ -372,12 +368,17 @@ func (r *Renter) loadSiaFiles() error {
 	})
 }
 
-// managedCalculateMinHealth reads the sia files in the directory and returns the
-// minHealth. This method with log errors and not consider errors fatal
-func (r *Renter) managedCalculateMinHealth(path string) (minHealth int) {
+// managedDirectoryHealth reads the sia files in the directory and returns the
+// minHealth. The minHealth is the lowest health of any of the siafiles in the
+// directory. Health is defined as goodPieces - MinPieces, as this tells use the
+// number of pieces that can go offline before a file is unrecoverable. This
+// method with log errors and not consider errors fatal
+//
+// A file is recoverable if Health >= 0
+func (r *Renter) managedDirectoryHealth(path string) int {
 	// Initialize minHealth as MaxInt64 so errors and empty directories won't
 	// falsely indicate the most in need directory
-	minHealth = math.MaxInt64
+	minHealth := math.MaxInt64
 
 	// Read directory
 	finfos, err := ioutil.ReadDir(path)
@@ -389,7 +390,7 @@ func (r *Renter) managedCalculateMinHealth(path string) (minHealth int) {
 	// Load siafiles
 	var siafiles []*siafile.SiaFile
 	for _, fi := range finfos {
-		if !strings.HasPrefix(fi.Name(), ShareExtension) {
+		if filepath.Ext(fi.Name()) != ShareExtension {
 			continue
 		}
 		filename := filepath.Join(path, fi.Name())
@@ -476,9 +477,9 @@ func (r *Renter) managedPropagateMinHealth(path string) (minHealth int) {
 		}
 	}
 
-	// After iterating over entire directory call managedCalculateMinHealth and
+	// After iterating over entire directory call managedDirectoryHealth and
 	// check directory health against minHealth
-	dirHealth := r.managedCalculateMinHealth(path)
+	dirHealth := r.managedDirectoryHealth(path)
 	if dirHealth < minHealth {
 		minHealth = dirHealth
 	}

@@ -155,21 +155,12 @@ var (
 	// while other files degrade
 	//
 	// TODO - threadedUpload loop only runs every 15mins, unless renter uploads
-<<<<<<< HEAD
-	// file. How should this impact the value of timeBetweenRepair
-	timeBetweenRepair = build.Select(build.Var{
-		Dev:      int64(time.Minute * 5),
-		Standard: int64(time.Hour * 2),
-		Testing:  int64(time.Second * 5),
-	}).(int64)
-=======
 	// file. How should this impact the value of repairInterval
 	repairInterval = build.Select(build.Var{
 		Dev:      time.Minute,
 		Standard: 10 * time.Minute,
 		Testing:  time.Second,
 	}).(time.Duration)
->>>>>>> 9a1e327... Update naming of repair loop interval constants
 
 	// Prime to avoid intersecting with regular events.
 	uploadFailureCooldown = build.Select(build.Var{
