@@ -3,10 +3,12 @@ package renter
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"gitlab.com/NebulousLabs/Sia/modules"
 	"gitlab.com/NebulousLabs/Sia/modules/renter/siafile"
@@ -126,19 +128,43 @@ func TestRenterDirectories(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Confirm that direcotry metadata files were created in all directories.
-	if _, err = os.Stat(filepath.Join(rt.renter.filesDir, SiaDirMetadata)); err != nil {
+	// Confirm that direcotry metadata files were created in all directories
+	dir := rt.renter.filesDir
+	if err := rt.checkDirMetadata(dir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = os.Stat(filepath.Join(rt.renter.filesDir, "foo/"+SiaDirMetadata)); err != nil {
+	if err := rt.checkDirMetadata(filepath.Join(dir, "foo/")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = os.Stat(filepath.Join(rt.renter.filesDir, "foo/bar/"+SiaDirMetadata)); err != nil {
+	if err := rt.checkDirMetadata(filepath.Join(dir, "foo/bar/")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = os.Stat(filepath.Join(rt.renter.filesDir, "foo/bar/baz/"+SiaDirMetadata)); err != nil {
+	if err := rt.checkDirMetadata(filepath.Join(dir, "foo/bar/baz/")); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// checkDirMetadata is a helper function that checks that the directory metadata
+// files exist and contain the correct information
+func (rt *renterTester) checkDirMetadata(dir string) error {
+	if _, err := os.Stat(filepath.Join(dir, SiaDirMetadata)); err != nil {
+		return err
+	}
+	md, err := rt.renter.loadDirMetadata(dir)
+	if err != nil {
+		return fmt.Errorf("unable to load directory %v metadata: %v", dir, err)
+	}
+
+	// Since we only store the metadata on disk we don't know what the time was
+	// when it was created and therefore updated. So we can only confirm that
+	// the time is not zero and it is before Now()
+	if md.MinHealth != math.MaxInt64 {
+		return fmt.Errorf("Expected MinHealth to be MaxInt64, but instead was %v", md.MinHealth)
+	}
+	if md.RecentUpdateTime.UnixNano() == 0 || md.RecentUpdateTime.UnixNano() >= time.Now().UnixNano() {
+		return fmt.Errorf("RecentUpdateTime not as expected, %v", md.RecentUpdateTime)
+	}
+	return nil
 }
 
 // TestRenterPaths checks that the renter properly handles nicknames

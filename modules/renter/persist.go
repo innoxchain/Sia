@@ -73,7 +73,7 @@ type (
 	// dirMetadata contains the metadata information about a renter directory
 	dirMetadata struct {
 		MinHealth        int
-		RecentUpdateTime int64
+		RecentUpdateTime time.Time
 	}
 
 	// persist contains all of the persistent renter data.
@@ -136,7 +136,7 @@ func (f *file) MarshalSia(w io.Writer) error {
 	return nil
 }
 
-// UnmarshalSia implements the encoding.SiaUnmarshaller interface,
+// UnmarshalSia implements the encoding.SiaUnmarshaler interface,
 // reconstructing a file from the encoded bytes read from r.
 func (f *file) UnmarshalSia(r io.Reader) error {
 	dec := encoding.NewDecoder(r)
@@ -235,7 +235,7 @@ func (r *Renter) createDirMetadata(path string) error {
 	// won't be viewed as being the most in need
 	data := dirMetadata{
 		MinHealth:        math.MaxInt64,
-		RecentUpdateTime: time.Now().UnixNano(),
+		RecentUpdateTime: time.Now(),
 	}
 	return r.saveDirMetadata(path, data)
 }
@@ -304,7 +304,7 @@ func (r *Renter) minHealthDir() (string, error) {
 	}
 
 	// Check to see if directory returned is the top level files directory. If
-	// so and it was recently repaired, submit the lowest heatlh directory
+	// so and it was recently repaired, submit the lowest health directory
 	// regardless of its RecentRepairTime
 	if dir == r.filesDir && minHealth == math.MaxInt64 {
 		return "", errAllFilesRecentlyRepaired
@@ -381,7 +381,7 @@ func (r *Renter) managedDirectoryHealth(path string) int {
 	minHealth := math.MaxInt64
 
 	// Read directory
-	finfos, err := ioutil.ReadDir(path)
+	fileInfos, err := ioutil.ReadDir(path)
 	if err != nil {
 		r.log.Printf("WARN: Error in reading files in directory %v : %v\n", path, err)
 		return minHealth
@@ -389,7 +389,7 @@ func (r *Renter) managedDirectoryHealth(path string) int {
 
 	// Load siafiles
 	var siafiles []*siafile.SiaFile
-	for _, fi := range finfos {
+	for _, fi := range fileInfos {
 		if filepath.Ext(fi.Name()) != ShareExtension {
 			continue
 		}
@@ -491,7 +491,7 @@ func (r *Renter) managedPropagateMinHealth(path string) (minHealth int) {
 		return minHealth
 	}
 	md.MinHealth = minHealth
-	md.RecentUpdateTime = time.Now().UnixNano()
+	md.RecentUpdateTime = time.Now()
 	err = r.saveDirMetadata(path, md)
 	if err != nil {
 		r.log.Println("WARN: could not update directory metadata:", err)

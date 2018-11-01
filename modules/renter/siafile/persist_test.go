@@ -166,15 +166,20 @@ func TestNewFile(t *testing.T) {
 	if sf.staticMetadata.ModTime.Unix() != sf2.staticMetadata.ModTime.Unix() {
 		t.Fatal("ModTime's don't match")
 	}
+	if sf.staticMetadata.RecentRepairTime.Unix() != sf2.staticMetadata.RecentRepairTime.Unix() {
+		t.Fatal("RecentRepairTime's don't match")
+	}
 	// Set the timestamps to zero for DeepEqual.
 	sf.staticMetadata.AccessTime = time.Time{}
 	sf.staticMetadata.ChangeTime = time.Time{}
 	sf.staticMetadata.CreateTime = time.Time{}
 	sf.staticMetadata.ModTime = time.Time{}
+	sf.staticMetadata.RecentRepairTime = time.Time{}
 	sf2.staticMetadata.AccessTime = time.Time{}
 	sf2.staticMetadata.ChangeTime = time.Time{}
 	sf2.staticMetadata.CreateTime = time.Time{}
 	sf2.staticMetadata.ModTime = time.Time{}
+	sf2.staticMetadata.RecentRepairTime = time.Time{}
 	// Compare the rest of sf and sf2.
 	if !reflect.DeepEqual(sf.staticMetadata, sf2.staticMetadata) {
 		fmt.Println(sf.staticMetadata)
@@ -403,6 +408,9 @@ func TestMarshalUnmarshalMetadata(t *testing.T) {
 
 	sf := newTestFile()
 
+	// Manually set RecentRepairTime as it is not set when siafile is created
+	sf.staticMetadata.RecentRepairTime = time.Now()
+
 	// Marshal metadata
 	raw, err := marshalMetadata(sf.staticMetadata)
 	if err != nil {
@@ -427,15 +435,20 @@ func TestMarshalUnmarshalMetadata(t *testing.T) {
 	if sf.staticMetadata.ModTime.Unix() != md.ModTime.Unix() {
 		t.Fatal("ModTime's don't match")
 	}
+	if sf.staticMetadata.RecentRepairTime.Unix() != md.RecentRepairTime.Unix() {
+		t.Fatal("RecentRepairTime's don't match")
+	}
 	// Set the timestamps to zero for DeepEqual.
 	sf.staticMetadata.AccessTime = time.Time{}
 	sf.staticMetadata.ChangeTime = time.Time{}
 	sf.staticMetadata.CreateTime = time.Time{}
 	sf.staticMetadata.ModTime = time.Time{}
+	sf.staticMetadata.RecentRepairTime = time.Time{}
 	md.AccessTime = time.Time{}
 	md.ChangeTime = time.Time{}
 	md.CreateTime = time.Time{}
 	md.ModTime = time.Time{}
+	md.RecentRepairTime = time.Time{}
 	// Compare result to original
 	if !reflect.DeepEqual(md, sf.staticMetadata) {
 		t.Fatal("Unmarshaled metadata not equal to marshaled metadata:", err)
