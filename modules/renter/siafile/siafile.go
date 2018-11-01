@@ -236,16 +236,26 @@ func (sf *SiaFile) Available(offline map[string]bool) bool {
 // chunkHealth returns the health of the chunk which is the lowest number of
 // goodPieces - MinPieces of any of the chunk's pieces
 func (sf *SiaFile) chunkHealth(chunkIndex int, offline map[string]bool) int {
-	var goodPieces int
+	minGoodPieces := math.MaxInt64
+	// Iterate over each pieceSet
 	for _, pieceSet := range sf.staticChunks[chunkIndex].Pieces {
+		var goodPieces int
+		// Iterate over each piece in the set and count all the unique
+		// goodPieces
+		mapCopy := offline
 		for _, piece := range pieceSet {
-			if !offline[string(sf.pubKeyTable[piece.HostTableOffset].PublicKey.Key)] {
+			if !mapCopy[string(sf.pubKeyTable[piece.HostTableOffset].PublicKey.Key)] {
 				goodPieces++
-				break // break out since we only count unique pieces
 			}
+			// Remove pubkey from copy of map so duplicate pieces with hosts
+			// aren't counted
+			delete(mapCopy, string(sf.pubKeyTable[piece.HostTableOffset].PublicKey.Key))
+		}
+		if goodPieces < minGoodPieces {
+			minGoodPieces = goodPieces
 		}
 	}
-	return goodPieces - sf.staticMetadata.staticErasureCode.MinPieces()
+	return minGoodPieces - sf.staticMetadata.staticErasureCode.MinPieces()
 }
 
 // ChunkIndexByOffset will return the chunkIndex that contains the provided

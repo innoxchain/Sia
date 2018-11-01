@@ -250,6 +250,96 @@ func TestFileRedundancy(t *testing.T) {
 	}
 }
 
+// TestFileHealth tests that the health of the file is correctly calculated.
+func TestFileHealth(t *testing.T) {
+	// Create File with 1 chunks with 2 pieces
+	rsc, _ := siafile.NewRSCode(1, 1)
+	f := newFileTesting(t.Name(), newTestingWal(), rsc, 100, 0777, "")
+
+	// Create offline map
+	offlineMap := make(map[string]bool)
+
+	// Check file health, since there are no pieces in the chunk yet no good
+	// pieces will be found resulting in a health of -1
+	if f.Health(offlineMap) != -1 {
+		t.Fatalf("Health of file not as expected, got %v expected -1", f.Health(offlineMap))
+	}
+
+	// Add good pieces to first Piece Set
+	for i := 0; i < 2; i++ {
+		host := fmt.Sprintln("host", i)
+		spk := types.SiaPublicKey{}
+		spk.LoadString(host)
+		offlineMap[string(spk.Key)] = false
+		if err := f.AddPiece(spk, 0, 0, crypto.Hash{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Check health, should still be -1 because other piece set doesn't have any
+	// good pieces
+	if f.Health(offlineMap) != -1 {
+		t.Fatalf("Health of file not as expected, got %v expected -1", f.Health(offlineMap))
+	}
+
+	// Add good pieces to second piece set, confirm health is good.
+	for i := 0; i < 2; i++ {
+		host := fmt.Sprintln("host", i)
+		spk := types.SiaPublicKey{}
+		spk.LoadString(host)
+		offlineMap[string(spk.Key)] = false
+		if err := f.AddPiece(spk, 0, 1, crypto.Hash{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.Health(offlineMap) != 1 {
+		t.Fatalf("Health of file not as expected, got %v expected 1", f.Health(offlineMap))
+	}
+
+	// Create File with 2 chunks with 2 pieces
+	f = newFileTesting(t.Name(), newTestingWal(), rsc, 5e3, 0777, "")
+
+	// Create offline map
+	offlineMap = make(map[string]bool)
+
+	// Check file health, since there are no pieces in the chunk yet no good
+	// pieces will be found resulting in a health of -1
+	if f.Health(offlineMap) != -1 {
+		t.Fatalf("Health of file not as expected, got %v expected -1", f.Health(offlineMap))
+	}
+
+	// Add good pieces to the first chunk
+	for i := 0; i < 4; i++ {
+		host := fmt.Sprintln("host", i)
+		spk := types.SiaPublicKey{}
+		spk.LoadString(host)
+		offlineMap[string(spk.Key)] = false
+		if err := f.AddPiece(spk, 0, uint64(i%2), crypto.Hash{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Check health, should still be -1 because other chunk doesn't have any
+	// good pieces
+	if f.Health(offlineMap) != -1 {
+		t.Fatalf("Health of file not as expected, got %v expected -1", f.Health(offlineMap))
+	}
+
+	// Add good pieces to second chunk, confirm health is good.
+	for i := 0; i < 4; i++ {
+		host := fmt.Sprintln("host", i)
+		spk := types.SiaPublicKey{}
+		spk.LoadString(host)
+		offlineMap[string(spk.Key)] = false
+		if err := f.AddPiece(spk, 1, uint64(i%2), crypto.Hash{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.Health(offlineMap) != 1 {
+		t.Fatalf("Health of file not as expected, got %v expected 1", f.Health(offlineMap))
+	}
+}
+
 // TestFileExpiration probes the expiration method of the file type.
 func TestFileExpiration(t *testing.T) {
 	if testing.Short() {
